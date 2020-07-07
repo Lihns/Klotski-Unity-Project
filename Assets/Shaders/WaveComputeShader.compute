@@ -1,0 +1,66 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float> Result;
+Texture2D<float2> _kTexture;
+Texture2D<float2> _dVTexture;
+
+SamplerState sampler_kTexture;
+
+StructuredBuffer<float4> perWaveData;
+
+cbuffer cb0
+{
+    int num_wave_samples;
+    float2
+        V_bounds, wave_types;
+    float
+        g,
+        R_star,
+        nu,
+        tau,
+        alpha;
+};
+
+
+
+[numthreads(512, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    uint2 gid = id.xy;
+
+	// Evaluate wave height
+    float frac = (float(gid.x) + 0.5f) / num_wave_samples;
+    float r = lerp(perWaveData[gid.y].x, perWaveData[gid.y].y, frac);
+    float t = perWaveData[gid.y].z;
+
+    float V = r / t;
+    float2 V_tc;
+    V_tc.x = (V - V_bounds.x) / (V_bounds.y - V_bounds.x);
+    V_tc.y = 0;
+    float2 k = _kTexture.SampleLevel(sampler_kTexture, V_tc, 0); // texture(k_texture, V_tc).rg;
+    float2 dV = _dVTexture.SampleLevel(sampler_kTexture, V_tc, 0); //texture(dV_texture, V_tc).rg;
+
+    float c1 = sqrt(g / R_star);
+
+    float2 k_star = k / R_star;
+    float2 ksq = k * k;
+    float2 sgm = sqrt(k * (1 + tau * ksq));
+    float2 sgm_star = sgm * c1;
+    float2 gamma1 = 0.5 * nu * sqrt(sgm_star / (2.f * nu)) * k_star;
+    float2 gamma2 = 2 * nu * k_star * k_star;
+    float2 gamma = gamma1 + gamma2;
+    float2 temp = 0.5 * k_star * R_star;
+    float2 bsl = 0.5 * temp * temp;
+    float2 theta = sgm * bsl * cos(sgm * t - k * r) / sqrt(t * r * ksq * k * abs(dV));
+
+    float t_star = t / c1;
+    float mult = smoothstep(0.0f, 0.1f, frac) * (1.f - smoothstep(0.9f, 1.0f, frac));
+    float2 theta_star = mult * wave_types * exp(-gamma * t_star) * theta / alpha;
+    float eta_star = theta_star.x + theta_star.y;
+		
+    Result[gid.xy] = eta_star;
+
+}
